@@ -1,0 +1,60 @@
+# ============================================================
+# .gitignore — Olist E2E Data Pipeline
+# NUNCA subir: credenciales, datos crudos, entorno virtual
+# ============================================================
+
+# === Entorno virtual =========================================
+Proyecto_Final_Mod_4/
+venv/
+.venv/
+env/
+
+# === Credenciales y variables de entorno (NUNCA subir) =======
+.env
+*.env
+kaggle.json
+credentials.json
+*.pem
+*.key
+*.crt
+
+# === Datos crudos (Kaggle CSVs — se regeneran con Phase 1) ===
+data/
+
+# === Logs ====================================================
+logs/
+*.log
+
+# === Power BI — el .pbix puede contener credenciales cacheadas
+# Solo se sube el PDF exportado y los screenshots
+powerbi/*.pbix
+
+# === Python ==================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# === Jupyter =================================================
+.ipynb_checkpoints/
+
+# === IDEs ====================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === OS ======================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Testing =================================================
+.pytest_cache/
+.coverage
+htmlcov/
