@@ -309,6 +309,8 @@ flowchart TD
 
     PAY -->|"CAST numéricos"| FPAY["💳 fact_payments"]
     REV -->|"NULLIF textos vacíos"| FREV["⭐ fact_reviews"]
+    DORD -.->|order_sk| FPAY
+    DORD -.->|order_sk| FREV
 
     style ORD   fill:#aaa,color:#fff
     style CUST  fill:#aaa,color:#fff
@@ -338,8 +340,8 @@ flowchart TD
 | `dim_sellers` | `staging.sellers` | Igual que customers: `INITCAP` + `UPPER` |
 | `dim_orders` | `staging.orders` | `NULLIF(col,'')::TIMESTAMP` en las **5 columnas de fecha** — el patrón más crítico |
 | `fact_order_items` | `staging.order_items` | `JOIN` a 4 dimensiones para reemplazar IDs de texto por surrogate keys INTEGER |
-| `fact_payments` | `staging.order_payments` | `CAST(payment_value AS NUMERIC)`, `CAST(payment_installments AS INTEGER)` |
-| `fact_reviews` | `staging.order_reviews` | `NULLIF(review_comment_message, '')` convierte comentarios vacíos a NULL |
+| `fact_payments` | `staging.order_payments` | `LEFT JOIN dim_orders ON order_id` para obtener `order_sk`; `CAST` numéricos en valor e installments |
+| `fact_reviews` | `staging.order_reviews` | `LEFT JOIN dim_orders ON order_id` para obtener `order_sk`; `NULLIF` en comentarios vacíos |
 
 ### Por qué el patrón `NULLIF(col, '')` es la clave del ETL
 
