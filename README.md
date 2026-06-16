@@ -1081,10 +1081,21 @@ Los hallazgos del EDA justifican cada decisión del modelo:
 
 ---
 
+## Arquitectura Detallada
+
+Para una vista completa de la arquitectura del sistema, incluyendo diagramas de flujo de datos, modelo dimensional ERD completo, stack tecnológico y decisiones de diseño justificadas:
+
+📐 **[Ver documentación de arquitectura completa →](docs/architecture/architecture.md)**
+
+---
+
 ## Estructura del Repositorio
 
 ```
 .
+├── docs/
+│   └── architecture/
+│       └── architecture.md              # Diagramas + decisiones de arquitectura
 ├── config/
 │   └── settings.py                      # Carga y valida todas las env vars
 ├── scripts/
