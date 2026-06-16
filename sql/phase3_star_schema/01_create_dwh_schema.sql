@@ -4,14 +4,16 @@
 CREATE SCHEMA IF NOT EXISTS dwh;
 
 -- ── Drops ────────────────────────────────────────────────────────────────────
-DROP TABLE IF EXISTS dwh.fact_order_items;
-DROP TABLE IF EXISTS dwh.fact_payments;
-DROP TABLE IF EXISTS dwh.fact_reviews;
-DROP TABLE IF EXISTS dwh.dim_customers;
-DROP TABLE IF EXISTS dwh.dim_products;
-DROP TABLE IF EXISTS dwh.dim_sellers;
-DROP TABLE IF EXISTS dwh.dim_orders;
-DROP TABLE IF EXISTS dwh.dim_date;
+-- CASCADE elimina las vistas de reporting que dependen de estas tablas.
+-- Las vistas se recrean al ejecutar Fase 4 después de esta fase.
+DROP TABLE IF EXISTS dwh.fact_order_items CASCADE;
+DROP TABLE IF EXISTS dwh.fact_payments    CASCADE;
+DROP TABLE IF EXISTS dwh.fact_reviews     CASCADE;
+DROP TABLE IF EXISTS dwh.dim_customers    CASCADE;
+DROP TABLE IF EXISTS dwh.dim_products     CASCADE;
+DROP TABLE IF EXISTS dwh.dim_sellers      CASCADE;
+DROP TABLE IF EXISTS dwh.dim_orders       CASCADE;
+DROP TABLE IF EXISTS dwh.dim_date         CASCADE;
 
 -- ── Dimensiones ───────────────────────────────────────────────────────────────
 
@@ -89,6 +91,7 @@ CREATE TABLE dwh.fact_order_items (
 CREATE TABLE dwh.fact_payments (
     payment_sk           SERIAL      PRIMARY KEY,
     order_id             VARCHAR(32) NOT NULL,
+    order_sk             INTEGER     REFERENCES dwh.dim_orders(order_sk),
     payment_sequential   INTEGER,
     payment_type         VARCHAR(30),
     payment_installments INTEGER,
@@ -99,6 +102,7 @@ CREATE TABLE dwh.fact_reviews (
     review_sk               SERIAL      PRIMARY KEY,
     review_id               VARCHAR(32),
     order_id                VARCHAR(32) NOT NULL,
+    order_sk                INTEGER     REFERENCES dwh.dim_orders(order_sk),
     review_score            SMALLINT,
     review_comment_title    TEXT,
     review_comment_message  TEXT,

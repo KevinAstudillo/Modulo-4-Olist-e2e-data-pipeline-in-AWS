@@ -27,29 +27,33 @@ WHERE dor.order_purchase_timestamp IS NOT NULL;
 
 -- ── fact_payments ─────────────────────────────────────────────────────────────
 INSERT INTO dwh.fact_payments (
-    order_id, payment_sequential, payment_type,
+    order_id, order_sk, payment_sequential, payment_type,
     payment_installments, payment_value
 )
 SELECT
-    order_id,
-    NULLIF(payment_sequential,   '')::INTEGER,
-    payment_type,
-    NULLIF(payment_installments, '')::INTEGER,
-    NULLIF(payment_value,        '')::NUMERIC(10,2)
-FROM staging.order_payments;
+    pay.order_id,
+    dor.order_sk,
+    NULLIF(pay.payment_sequential,   '')::INTEGER,
+    pay.payment_type,
+    NULLIF(pay.payment_installments, '')::INTEGER,
+    NULLIF(pay.payment_value,        '')::NUMERIC(10,2)
+FROM staging.order_payments pay
+LEFT JOIN dwh.dim_orders dor ON pay.order_id = dor.order_id;
 
 -- ── fact_reviews ──────────────────────────────────────────────────────────────
 INSERT INTO dwh.fact_reviews (
-    review_id, order_id, review_score,
+    review_id, order_id, order_sk, review_score,
     review_comment_title, review_comment_message,
     review_creation_date, review_answer_timestamp
 )
 SELECT
-    review_id,
-    order_id,
-    NULLIF(review_score, '')::SMALLINT,
-    NULLIF(review_comment_title,   ''),
-    NULLIF(review_comment_message, ''),
-    NULLIF(review_creation_date,      '')::TIMESTAMP,
-    NULLIF(review_answer_timestamp,   '')::TIMESTAMP
-FROM staging.order_reviews;
+    rev.review_id,
+    rev.order_id,
+    dor.order_sk,
+    NULLIF(rev.review_score, '')::SMALLINT,
+    NULLIF(rev.review_comment_title,   ''),
+    NULLIF(rev.review_comment_message, ''),
+    NULLIF(rev.review_creation_date,      '')::TIMESTAMP,
+    NULLIF(rev.review_answer_timestamp,   '')::TIMESTAMP
+FROM staging.order_reviews rev
+LEFT JOIN dwh.dim_orders dor ON rev.order_id = dor.order_id;
