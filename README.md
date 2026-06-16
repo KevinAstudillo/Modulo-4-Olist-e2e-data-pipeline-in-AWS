@@ -886,7 +886,7 @@ Genera un snapshot ejecutivo para cualquier período YYYY-MM. Calcula KPIs del m
 | `fecha_generacion` | TIMESTAMPTZ | Cuándo se ejecutó el procedure |
 | `ingresos_totales` | NUMERIC | Revenue total del mes (BRL) |
 | `total_ordenes` | BIGINT | Órdenes únicas en el mes |
-| `ticket_promedio` | NUMERIC | Revenue promedio por ítem |
+| `ticket_promedio` | NUMERIC | Revenue promedio por orden (= `ingresos_totales / total_ordenes`) |
 | `top_categoria_1/2/3` | TEXT | Las 3 categorías con mayor revenue en el mes |
 | `top_vendedor_1/2/3` | TEXT | Los 3 vendedores con mayor revenue en el mes |
 | `score_satisfaccion` | NUMERIC | Promedio de review_score del mes (1–5) |
@@ -1051,31 +1051,33 @@ Los hallazgos del EDA justifican cada decisión del modelo:
 
 ## Hallazgos Principales
 
-Los siguientes insights fueron descubiertos a partir del análisis del dataset de Olist (2016–2018):
+> Insights descubiertos a partir del pipeline completo (DWH en Aurora) y el EDA sobre la capa Bronze (Sep 2016 – Oct 2018).
 
 ### Revenue y Crecimiento
-- El negocio escaló de **$354 en septiembre 2016** a más de **$1.1M mensuales en 2018**, reflejando el crecimiento explosivo de Olist como marketplace.
-- El mayor pico de revenue ocurrió en **noviembre 2017** con un crecimiento del **53% respecto a octubre** — consistente con la temporada de ventas de fin de año en Brasil (Black Friday).
-- Los últimos meses del dataset (agosto–septiembre 2018) muestran una caída abrupta, ya que los datos están truncados y no representan el cierre del año.
+- El negocio escaló de **R$354 en septiembre 2016** a más de **R$1.1M mensuales en 2018** — crecimiento de >200% en 18 meses, impulsado por expansión orgánica del marketplace.
+- El mayor pico ocurrió en **noviembre 2017** con un crecimiento del **+53.27% MoM** (R$1,179,143.77) — Black Friday Brasil como palanca de demanda principal.
+- Los últimos meses del dataset (septiembre–octubre 2018) muestran caída abrupta: datos truncados, no representan el cierre del año.
 
 ### Categorías de Productos (Pareto)
-- **Solo 15 de 72 categorías** concentran el 80% del revenue total — el principio de Pareto se cumple con precisión.
-- **health_beauty** es la categoría líder con ~$1.44M en revenue, seguida de **watches_gifts** y **bed_bath_table**.
-- Categorías como **fashion_male_clothing** y **fixed_telephony** tienen alta presencia en órdenes pero revenue bajo — indicando tickets promedio muy pequeños.
+- **Solo 15 de 72 categorías** concentran el 80% del revenue total — principio de Pareto validado con precisión.
+- **health_beauty** lidera con **R$1,441,248** en revenue (9.1% del total), seguida de **watches_gifts** (R$1,305,542) y **bed_bath_table** (R$1,241,682).
+- El **long tail** de 57 categorías restantes genera solo el 20% del revenue — señal de concentración de catálogo.
+- Categorías como **fashion_male_clothing** y **fixed_telephony** tienen presencia en órdenes pero ticket promedio bajo.
 
 ### Vendedores
-- El **top 10 de vendedores** concentra una porción desproporcionada del revenue total, típico de marketplaces en etapa de crecimiento.
-- Los vendedores de **São Paulo (SP)** dominan el revenue por estado — lógico dado que SP es el centro económico y logístico de Brasil.
+- El **top 5% de vendedores genera el 50% del revenue total** — Curva de Lorenz con alto coeficiente de Gini, típico de marketplaces en etapa de crecimiento.
+- ~60% de los vendedores tienen **menos de 10 órdenes** en 2 años — perfil mayoritariamente casual.
+- Los vendedores de **São Paulo (SP)** dominan el revenue por su ventaja logística y acceso al mayor mercado de Brasil.
 
 ### Logística
-- Los estados del norte de Brasil (**AP, RR, AM**) tienen los peores tiempos de entrega, superando los **25 días promedio** — más del triple que SP (~8.3 días), una brecha de 3.3x explicada por infraestructura vial e infraestructura logística.
-- La distancia geográfica y la infraestructura vial son los principales factores: los estados del norte son los más remotos del país.
-- Los estados del sureste (**SP, PR, SC**) lideran en eficiencia logística, lo que refuerza la ventaja competitiva de los vendedores ubicados allí.
+- **Brecha de 3.3x** entre los estados más lentos y SP: AP y RR promedian **27.8 días** de entrega vs **8.3 días** en SP.
+- Los estados del norte (AP, RR, AM) superan los 25 días promedio — la mayor brecha logística del país.
+- Los estados del sureste (**SP, PR, SC, MG**) lideran en eficiencia logística, reforzando la ventaja competitiva de los vendedores ubicados allí.
 
 ### Satisfacción del Cliente
-- **books_general_interest** lidera con un score de satisfacción de **4.4 / 5.0**, sugiriendo que los productos físicos de bajo precio y expectativas claras generan mayor satisfacción.
-- **office_furniture** tiene el peor score (~3.4), posiblemente por dificultades en el envío de productos voluminosos y tiempos de entrega extendidos.
-- No existe una correlación directa entre ticket promedio y satisfacción — categorías baratas y caras pueden tener scores similares dependiendo de la experiencia de entrega.
+- **books_general_interest** lidera con **4.45 / 5.0** (549 reseñas, 87.8% positivas) — expectativas claras y entregas confiables explican el top ranking.
+- **office_furniture** tiene el peor score: **3.49 / 5.0** con 1,687 reseñas (59.7% positivas) — el volumen y peso de los productos dificultan la logística.
+- **Correlación inversa confirmada:** 4.4★ en entregas ≤7 días vs 2.6★ en entregas >30 días — la puntualidad logística es el principal driver de NPS.
 
 ---
 
@@ -1153,8 +1155,8 @@ Los siguientes insights fueron descubiertos a partir del análisis del dataset d
 ### 2. Setup inicial
 
 ```bash
-git clone https://github.com/tu-usuario/olist-e2e-pipeline.git
-cd olist-e2e-pipeline
+git clone https://github.com/KevinAstudillo/Modulo-4-Olist-e2e-data-pipeline-in-AWS.git
+cd Modulo-4-Olist-e2e-data-pipeline-in-AWS
 python -m venv Proyecto_Final_Mod_4
 Proyecto_Final_Mod_4\Scripts\activate   # Windows
 pip install -r requirements.txt
@@ -1313,4 +1315,4 @@ El tablero tiene **3 páginas** conectadas directamente a las 5 vistas del schem
 
 ## Tecnologías
 
-`Python 3.11` · `boto3` · `psycopg2` · `kaggle` · `python-dotenv` · `AWS S3` · `AWS Aurora PostgreSQL 17` · `SQL` · `PL/pgSQL` · `Jupyter` · `pandas` · `matplotlib` · `seaborn` · `Power BI` · `DAX`
+`Python 3.11` · `boto3` · `psycopg2` · `kaggle` · `python-dotenv` · `AWS S3` · `AWS Aurora PostgreSQL 17` · `SQL` · `PL/pgSQL` · `Jupyter` · `ipykernel` · `pandas` · `matplotlib` · `seaborn` · `numpy` · `Power BI` · `DAX`
