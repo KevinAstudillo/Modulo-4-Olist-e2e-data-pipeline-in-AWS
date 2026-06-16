@@ -6,8 +6,8 @@ Esta carpeta contiene los entregables de Business Intelligence del proyecto.
 
 | Archivo | Descripción |
 |---------|-------------|
-| `olist_dashboard_v1.pbix` | Archivo de Power BI Desktop — modelo de datos + dashboards |
-| `olist_dashboard_v1.pdf` | Exportación PDF del tablero para visualización rápida en GitHub |
+| `Tablero_Ejecutivo_DWH.pbix` | Archivo de Power BI Desktop — modelo de datos + dashboards |
+| `Tablero_Ejecutivo_DWH.pdf` | Exportación PDF del tablero para visualización rápida en GitHub |
 
 ## Fuente de datos
 
@@ -24,6 +24,6 @@ El tablero se conecta a las vistas de la capa `reporting` en Aurora PostgreSQL:
 ## Cómo abrir
 
 1. Tener Power BI Desktop instalado
-2. Abrir `olist_dashboard_v1.pbix`
+2. Abrir `Tablero_Ejecutivo_DWH.pbix`
 3. En **Inicio → Transformar datos → Configuración del origen de datos**, actualizar las credenciales de Aurora PostgreSQL con los valores de tu `.env`
 4. Hacer clic en **Actualizar**

@@ -1158,7 +1158,7 @@ Para una vista completa de la arquitectura del sistema, incluyendo diagramas de 
 
 ### 1. Prerrequisitos
 
-- Python 3.10+
+- Python 3.11
 - Cuenta de [Kaggle](https://www.kaggle.com/) con Legacy API Key
 - Cuenta de AWS con bucket S3 y cluster Aurora PostgreSQL
 - Git
