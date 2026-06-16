@@ -1124,10 +1124,64 @@ python -m scripts.phase4_bi_queries.main        # dwh → reporting views
 python -m scripts.phase5_procedures.main        # Stored Procedures + snapshots
 ```
 
-### 5. Abrir el EDA Notebook
+### 5. Correr los tests
+
+```bash
+# Tests unitarios — no requieren AWS ni Aurora (siempre disponibles)
+pytest -m unit
+
+# Tests de integración — requieren Aurora activo y .env configurado
+pytest -m integration
+
+# Suite completa
+pytest
+```
+
+### 6. Abrir el EDA Notebook
 
 ```bash
 jupyter notebook notebooks/01_EDA_Olist_Ecommerce.ipynb
+```
+
+---
+
+## Testing
+
+El proyecto incluye una suite de **81 tests** organizados en dos niveles:
+
+### Arquitectura de tests
+
+```
+tests/
+├── conftest.py                    # Fixture de conexión Aurora (session-scoped)
+├── test_config.py                 # Unit: carga y validación de configuración
+├── test_sql_files.py              # Unit: integridad de los 14 scripts SQL
+├── phase3/test_star_schema.py     # Integration: Star Schema en Aurora
+├── phase4/test_reporting_views.py # Integration: 5 vistas de reporting
+└── phase5/test_procedures.py      # Integration: snapshots y segmentación
+```
+
+### Tests unitarios — `pytest -m unit` (38 tests, sin AWS)
+
+| Archivo | Tests | Qué verifica |
+|---|---|---|
+| `test_config.py` | 5 | Config carga correctamente, vars requeridas fallan con `OSError`, defaults, `frozen=True` |
+| `test_sql_files.py` | 33 | Los 14 scripts SQL existen y no están vacíos, `DROP TABLE CASCADE` presente, `order_sk` definido en ambas fact tables |
+
+### Tests de integración — `pytest -m integration` (43 tests, requieren Aurora)
+
+| Archivo | Tests | Qué verifica |
+|---|---|---|
+| `phase3/test_star_schema.py` | 9 | Row counts exactos de las 8 tablas DWH, cero NULLs en FKs de `fact_order_items`, cobertura ≥99% de `order_sk` en `fact_payments`/`fact_reviews`, integridad `order_id↔order_sk`, precios positivos, scores 1-5, calendario sin huecos |
+| `phase4/test_reporting_views.py` | 13 | Row counts de las 5 vistas, spot-checks contra datos del README (Nov-2017 es el pico, SP entrega en ~8.3 días, `health_beauty` rank 1, curva de Pareto monótona, `office_furniture` peor satisfacción) |
+| `phase5/test_procedures.py` | 10 | `reporte_mensual_snapshot` con ≥20 períodos en formato `YYYY-MM`, Nov-2017 como pico en snapshot, `seller_segments` con 3,095 vendedores en segmentos A/B/C/D con distribución 20-30% cada uno |
+
+> Los tests de integración usan una fixture `db_conn` con scope de sesión — una sola conexión para todos los tests. Si `AURORA_HOST` no está en el `.env`, se saltan automáticamente con `SKIP`.
+
+### Resultado de la suite completa
+
+```
+========================= 81 passed in 11.49s =========================
 ```
 
 ---
@@ -1137,9 +1191,12 @@ jupyter notebook notebooks/01_EDA_Olist_Ecommerce.ipynb
 | Test | Resultado |
 |---|---|
 | FKs nulas en `fact_order_items` | 0 — PASS |
+| `order_sk` resuelto en `fact_payments` | 100% — PASS |
+| `order_sk` resuelto en `fact_reviews` | 100% — PASS |
 | Precios negativos | 0 — PASS |
 | Review scores fuera de rango 1-5 | 0 — PASS |
 | IDs duplicados en dimensiones | 0 — PASS |
+| Huecos en `dim_date` | 0 — PASS |
 
 ---
 
