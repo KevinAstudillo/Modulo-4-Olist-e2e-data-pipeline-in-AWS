@@ -229,6 +229,7 @@ erDiagram
     FACT_PAYMENTS {
         int     payment_sk           PK
         varchar order_id
+        int     order_sk             FK
         int     payment_sequential
         varchar payment_type
         int     payment_installments
@@ -238,6 +239,7 @@ erDiagram
         int       review_sk               PK
         varchar   review_id
         varchar   order_id
+        int       order_sk                FK
         smallint  review_score
         text      review_comment_title
         text      review_comment_message
@@ -250,17 +252,17 @@ erDiagram
     DIM_SELLERS    ||--o{ FACT_ORDER_ITEMS : "seller_sk"
     DIM_ORDERS     ||--o{ FACT_ORDER_ITEMS : "order_sk"
     DIM_DATE       ||--o{ FACT_ORDER_ITEMS : "date_sk"
-    DIM_ORDERS     ||--o{ FACT_PAYMENTS    : "order_id"
-    DIM_ORDERS     ||--o{ FACT_REVIEWS     : "order_id"
+    DIM_ORDERS     ||--o{ FACT_PAYMENTS    : "order_sk"
+    DIM_ORDERS     ||--o{ FACT_REVIEWS     : "order_sk"
 ```
 
 ### Tablas de Hechos
 
-| Tabla | Grain | Métricas |
-|---|---|---|
-| `fact_order_items` | 1 fila por ítem de pedido | `price`, `freight_value`, `total_value` |
-| `fact_payments` | 1 fila por pago | `payment_value`, `payment_installments` |
-| `fact_reviews` | 1 fila por reseña | `review_score` |
+| Tabla | Grain | FK a dim_orders | Métricas |
+|---|---|---|---|
+| `fact_order_items` | 1 fila por ítem de pedido | `order_sk` (surrogate) | `price`, `freight_value`, `total_value` |
+| `fact_payments` | 1 fila por pago | `order_sk` (surrogate) + `order_id` (natural, para trazabilidad) | `payment_value`, `payment_installments` |
+| `fact_reviews` | 1 fila por reseña | `order_sk` (surrogate) + `order_id` (natural, para trazabilidad) | `review_score` |
 
 ### Tablas de Dimensiones
 
@@ -396,16 +398,41 @@ price NUMERIC(10,2)  →  150.50
 
 **Por qué:** Los CSVs contienen valores vacíos, comas como separadores decimales y encoding inconsistente. Cargar como TEXT primero permite detectar y limpiar errores en SQL antes de castear.
 
-### 3. `fact_payments` y `fact_reviews` sin FK formal
+### 3. `fact_payments` y `fact_reviews`: FK formal via surrogate key
 
-Referencian `order_id` (natural key, VARCHAR) en vez de `order_sk` (PK de `dim_orders`). Una FK requiere apuntar al PK:
+Ambas tablas incluyen `order_sk INTEGER REFERENCES dwh.dim_orders(order_sk)` **y** conservan `order_id` (clave natural, VARCHAR) para trazabilidad:
 
 ```sql
-FOREIGN KEY (order_sk) REFERENCES dwh.dim_orders(order_sk)  -- ✅ funciona
-FOREIGN KEY (order_id) REFERENCES dwh.dim_orders(order_id)  -- ❌ order_id no es PK
+order_id  VARCHAR(32) NOT NULL,                              -- natural key: trazabilidad y debugging
+order_sk  INTEGER     REFERENCES dwh.dim_orders(order_sk)   -- surrogate key: FK formal al modelo estrella
 ```
 
-**Por qué:** En DWH (patrón Kimball), la integridad referencial se garantiza en el ETL, no en la base de datos. Las FK en fact tables son opcionales y frenan cargas masivas.
+#### ¿Cómo sabe el ETL qué número `order_sk` corresponde a cada pago?
+
+El `order_sk` es un `SERIAL` (1, 2, 3…) asignado automáticamente por PostgreSQL al poblar `dim_orders`. No se adivina — se **busca** en el ETL usando `order_id` como puente:
+
+```sql
+-- El ETL hace un JOIN para copiar el order_sk que dim_orders ya asignó:
+INSERT INTO dwh.fact_payments (order_id, order_sk, ...)
+SELECT
+    pay.order_id,
+    dor.order_sk,   -- ← viene de dim_orders: 'abc123' → order_sk = 42
+    ...
+FROM staging.order_payments pay
+LEFT JOIN dwh.dim_orders dor ON pay.order_id = dor.order_id;
+```
+
+El resultado es que `fact_payments.order_sk = 42` y `dim_orders.order_sk = 42` apuntan **al mismo pedido** porque el número 42 fue copiado de `dim_orders`, no generado independientemente. El `order_id` se conserva en ambas tablas como verificación: si `fact_payments.order_id = dim_orders.order_id` para todo `order_sk` que coincida, la integridad está garantizada.
+
+```sql
+-- Test de integridad: debe retornar 0
+SELECT COUNT(*)
+FROM dwh.fact_payments fp
+JOIN dwh.dim_orders dor ON fp.order_sk = dor.order_sk
+WHERE fp.order_id <> dor.order_id;
+```
+
+El uso de `LEFT JOIN` (en lugar de `INNER JOIN`) preserva pagos o reseñas cuyos pedidos no existan en `dim_orders` — quedan con `order_sk = NULL` en lugar de descartarse silenciosamente.
 
 ### 4. Schema `reporting` separado del DWH
 
@@ -455,7 +482,52 @@ SELECT year, month_name, ROUND(revenue, 2),
 FROM monthly ORDER BY year, month;
 ```
 
+**Columnas de `reporting.vw_revenue_mensual`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `year` | SMALLINT | Año del período |
+| `month` | SMALLINT | Número de mes (1–12) |
+| `month_name` | VARCHAR | Nombre del mes en inglés |
+| `revenue` | NUMERIC | Revenue total del mes (BRL) |
+| `total_ordenes` | BIGINT | Cantidad de órdenes únicas en el mes |
+| `ticket_promedio` | NUMERIC | Revenue promedio por ítem |
+| `revenue_mes_anterior` | NUMERIC | Revenue del mes previo (calculado con `LAG()`) |
+| `crecimiento_pct` | NUMERIC | Variación MoM en % — positivo = crecimiento |
+
 **Visual:** Gráfico de línea + columna combinado (revenue por mes / % crecimiento).
+
+**Ver en el Dashboard:** [Página 1 — Executive Summary](#página-1--executive-summary) · Gráficos "Revenue Mensual" y "Crecimiento Mensual"
+
+<details>
+<summary>📊 Datos reales — <code>reporting.vw_revenue_mensual</code> (20 filas con datos completos · Ene 2017 – Ago 2018)</summary>
+
+| Año  | Mes       | Revenue (BRL)      | Órdenes | Ticket Prom. | Crec. MoM   |
+|------|-----------|-------------------|---------|-------------|-------------|
+| 2017 | January   | 137,188.49        | 789     | 143.65      | —           |
+| 2017 | February  | 286,280.62        | 1,733   | 146.74      | +108.68%    |
+| 2017 | March     | 432,048.59        | 2,641   | 144.02      | +50.92%     |
+| 2017 | April     | 412,422.24        | 2,391   | 153.66      | -4.54%      |
+| 2017 | May       | 586,190.95        | 3,660   | 141.73      | +42.13%     |
+| 2017 | June      | 502,963.04        | 3,217   | 140.37      | -14.20%     |
+| 2017 | July      | 584,971.62        | 3,969   | 129.45      | +16.31%     |
+| 2017 | August    | 668,204.60        | 4,293   | 136.09      | +14.23%     |
+| 2017 | September | 720,398.91        | 4,243   | 149.12      | +7.81%      |
+| 2017 | October   | 769,312.37        | 4,568   | 144.55      | +6.79%      |
+| 2017 | November  | **1,179,143.77**  | **7,451** | 136.08   | **+53.27%** |
+| 2017 | December  | 863,547.23        | 5,624   | 136.90      | -26.76%     |
+| 2018 | January   | 1,107,301.89      | 7,220   | 134.91      | +28.23%     |
+| 2018 | February  | 986,908.96        | 6,694   | 128.64      | -10.87%     |
+| 2018 | March     | 1,155,126.82      | 7,188   | 140.58      | +17.04%     |
+| 2018 | April     | 1,159,698.04      | 6,934   | 145.42      | +0.40%      |
+| 2018 | May       | 1,149,781.82      | 6,853   | 145.08      | -0.86%      |
+| 2018 | June      | 1,022,677.11      | 6,160   | 144.49      | -11.05%     |
+| 2018 | July      | 1,058,728.03      | 6,273   | 149.28      | +3.53%      |
+| 2018 | August    | 1,003,308.47      | 6,452   | 138.43      | -5.23%      |
+
+> El pico de **noviembre 2017** (+53.27% MoM, R$1.17M) corresponde a Black Friday Brasil. Vista completa: 24 filas incluyendo meses parciales de inicio/fin del dataset.
+
+</details>
 
 ---
 
@@ -486,7 +558,46 @@ SELECT categoria, ROUND(revenue, 2),
 FROM revenue_cat, total ORDER BY revenue DESC;
 ```
 
+**Columnas de `reporting.vw_top_categorias_pareto`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `categoria` | VARCHAR | Nombre de la categoría en inglés (o `'Sin categoría'`) |
+| `revenue` | NUMERIC | Revenue total de la categoría (BRL) |
+| `total_items` | BIGINT | Cantidad de ítems vendidos en la categoría |
+| `pct_del_total` | NUMERIC | Porcentaje sobre el revenue total del catálogo |
+| `pct_acumulado` | NUMERIC | Porcentaje acumulado ordenado de mayor a menor revenue — la curva de Pareto |
+| `ranking` | BIGINT | Posición de la categoría por revenue (`RANK()`) |
+| `segmento_pareto` | VARCHAR | `'Top 80%'` si está en el 80% del revenue acumulado · `'Restante 20%'` si no |
+
 **Visual:** Gráfico de barras + línea de Pareto acumulada.
+
+**Ver en el Dashboard:** [Página 1](#página-1--executive-summary) · Barras "Top Categorías" — [Página 2](#página-2--análisis-de-vendedores-y-categorías) · Curva "Pareto de Categorías por Revenue"
+
+<details>
+<summary>📊 Datos reales — <code>reporting.vw_top_categorias_pareto</code> (top 15 de 72 categorías)</summary>
+
+| Ranking | Categoría               | Revenue (BRL)    | % del Total | % Acumulado | Segmento     |
+|---------|------------------------|-----------------|-------------|-------------|--------------|
+| 1       | health_beauty          | 1,441,248.07    | 9.10%       | 9.10%       | Top 80%      |
+| 2       | watches_gifts          | 1,305,541.61    | 8.24%       | 17.34%      | Top 80%      |
+| 3       | bed_bath_table         | 1,241,681.72    | 7.84%       | 25.18%      | Top 80%      |
+| 4       | sports_leisure         | 1,156,656.48    | 7.30%       | 32.48%      | Top 80%      |
+| 5       | computers_accessories  | 1,059,272.40    | 6.69%       | 39.17%      | Top 80%      |
+| 6       | furniture_decor        | 902,511.79      | 5.70%       | 44.87%      | Top 80%      |
+| 7       | housewares             | 778,397.77      | 4.91%       | 49.78%      | Top 80%      |
+| 8       | cool_stuff             | 719,329.95      | 4.54%       | 54.32%      | Top 80%      |
+| 9       | auto                   | 685,384.32      | 4.33%       | 58.65%      | Top 80%      |
+| 10      | garden_tools           | 584,219.21      | 3.69%       | 62.34%      | Top 80%      |
+| 11      | toys                   | 561,372.55      | 3.54%       | 65.88%      | Top 80%      |
+| 12      | baby                   | 480,118.00      | 3.03%       | 68.91%      | Top 80%      |
+| 13      | stationery             | —               | —           | ~72%        | Top 80%      |
+| 14      | telephony              | —               | —           | ~75%        | Top 80%      |
+| 15      | perfumery              | —               | —           | ~78%        | Top 80%      |
+
+> **15 categorías concentran el 80% del revenue total** (R$15.8M) sobre un universo de 72 categorías — el principio de Pareto se cumple con precisión.
+
+</details>
 
 ---
 
@@ -518,7 +629,44 @@ SELECT seller_id, seller_city, seller_state,
 FROM metricas ORDER BY revenue_total DESC;
 ```
 
+**Columnas de `reporting.vw_ranking_vendedores`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `seller_id` | VARCHAR | ID único del vendedor (anonimizado) |
+| `seller_city` | VARCHAR | Ciudad del vendedor |
+| `seller_state` | VARCHAR | Estado brasileño del vendedor (sigla de 2 letras) |
+| `revenue_total` | NUMERIC | Revenue acumulado total del vendedor (BRL) |
+| `total_ordenes` | BIGINT | Cantidad de órdenes únicas atendidas |
+| `ticket_promedio` | NUMERIC | Revenue promedio por ítem vendido |
+| `productos_distintos` | BIGINT | Cantidad de SKUs distintos vendidos |
+| `ranking_revenue` | BIGINT | Posición del vendedor por revenue total (`RANK()`) |
+| `ranking_ordenes` | BIGINT | Posición del vendedor por volumen de órdenes (`RANK()`) |
+| `ranking_ticket` | BIGINT | Posición del vendedor por ticket promedio (`RANK()`) |
+
 **Visual:** Tabla Top 10 + treemap por estado.
+
+**Ver en el Dashboard:** [Página 2 — Análisis de Vendedores y Categorías](#página-2--análisis-de-vendedores-y-categorías) · Treemap "Revenue por Estado y Ciudad" + Tabla "Revenue por Estado de los Vendedores"
+
+<details>
+<summary>📊 Datos reales — <code>reporting.vw_ranking_vendedores</code> (top 10 de 3,095 vendedores)</summary>
+
+| Rank Rev. | Seller ID (parcial)  | Ciudad               | Estado | Revenue (BRL) | Órdenes | Ticket Prom. | Rank Órd. |
+|-----------|---------------------|----------------------|--------|--------------|---------|-------------|-----------|
+| 1         | 4869f7a5dfa277a7    | Guariba              | SP     | 249,640.70   | 1,132   | 215.95      | 9         |
+| 2         | 7c67e1448b00f6e9    | Itaquaquecetuba      | SP     | 239,536.44   | 982     | 175.61      | 11        |
+| 3         | 53243585a1d6dc26    | Lauro de Freitas     | BA     | 235,856.68   | 358     | 575.26      | 40        |
+| 4         | 4a3ca9315b744ce9    | Ibitinga             | SP     | 235,539.96   | 1,806   | 118.54      | **2**     |
+| 5         | fa1c13f2614d7b5c    | Sumaré               | SP     | 204,084.73   | 585     | 348.27      | 19        |
+| 6         | da8622b14eb17ae2    | Piracicaba           | SP     | 185,192.32   | 1,314   | 119.40      | 5         |
+| 7         | 7e93a43ef30c4f03    | Barueri              | SP     | 182,754.05   | 336     | 537.51      | 46        |
+| 8         | 1025f0e2d44d7041    | São Paulo            | SP     | 172,860.69   | 915     | 121.05      | 13        |
+| 9         | 7a67c85e85bb2ce8    | São Paulo            | SP     | 162,648.38   | 1,160   | 138.90      | 7         |
+| 10        | 955fee9216a65b61    | São Paulo            | SP     | 160,602.68   | 1,287   | 107.14      | 6         |
+
+> El vendedor rank #3 en revenue (Lauro de Freitas, BA) tiene ticket promedio de R$575 — muy por encima del promedio. El vendedor rank #4 en revenue tiene el **mayor volumen de órdenes** (1,806).
+
+</details>
 
 ---
 
@@ -551,7 +699,60 @@ SELECT estado, ROUND(AVG(dias_entrega), 1) AS dias_promedio,
 FROM tiempos GROUP BY estado ORDER BY dias_promedio DESC;
 ```
 
+**Columnas de `reporting.vw_tiempo_entrega_estado`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `estado` | VARCHAR | Sigla del estado brasileño del cliente (ej. `SP`, `RJ`, `AM`) |
+| `dias_promedio` | NUMERIC | Promedio de días entre compra y entrega efectiva |
+| `entrega_minima` | NUMERIC | Tiempo mínimo de entrega registrado en el estado (días) |
+| `entrega_maxima` | NUMERIC | Tiempo máximo de entrega registrado en el estado (días) |
+| `total_entregas` | BIGINT | Cantidad de órdenes entregadas con fecha real registrada |
+| `ranking_mejor_entrega` | BIGINT | Posición del estado: 1 = más rápido (`RANK() ASC`) |
+| `ranking_peor_entrega` | BIGINT | Posición del estado: 1 = más lento (`RANK() DESC`) |
+
+> Solo incluye órdenes con `order_delivered_customer_date IS NOT NULL` y fecha de entrega posterior a la de compra.
+
 **Visual:** Mapa coroplético de Brasil coloreado por tiempo promedio.
+
+**Ver en el Dashboard:** [Página 3 — Calidad del Servicio](#página-3--calidad-del-servicio--logística-y-satisfacción) · Mapa "Tiempo de Entrega por Estado" + Barras "Top 10 Estados con Peor Entrega"
+
+<details>
+<summary>📊 Datos reales — <code>reporting.vw_tiempo_entrega_estado</code> (27 estados de Brasil)</summary>
+
+| Estado | Días Prom. | Días Mín. | Días Máx. | Entregas | Rank Peor | Rank Mejor |
+|--------|-----------|-----------|-----------|---------|-----------|------------|
+| AP     | **27.8**  | 5         | 187       | 81      | **1**     | 26         |
+| RR     | **27.8**  | 6         | 172       | 46      | **1**     | 26         |
+| AM     | 26.0      | 4         | 138       | 163     | 3         | 25         |
+| AL     | 24.0      | 4         | 90        | 427     | 4         | 24         |
+| PA     | 23.3      | 4         | 195       | 1,054   | 5         | 23         |
+| MA     | 21.2      | 3         | 168       | 800     | 6         | 22         |
+| SE     | 21.0      | 6         | 194       | 375     | 7         | 21         |
+| CE     | 20.5      | 2         | 168       | 1,426   | 8         | 20         |
+| AC     | 20.3      | 7         | 72        | 91      | 9         | 19         |
+| PB     | 20.1      | 5         | 102       | 586     | 10        | 18         |
+| RO     | 19.3      | 7         | 50        | 273     | 11        | 17         |
+| PI     | 18.9      | 2         | 194       | 523     | 12        | 15         |
+| RN     | 18.9      | 1         | 174       | 521     | 12        | 15         |
+| BA     | 18.8      | 2         | 167       | 3,677   | 14        | 14         |
+| PE     | 17.8      | 1         | 166       | 1,746   | 15        | 13         |
+| MT     | 17.5      | 3         | 79        | 1,037   | 16        | 12         |
+| TO     | 17.0      | 5         | 58        | 310     | 17        | 11         |
+| ES     | 15.2      | 2         | 209       | 2,225   | 18        | 10         |
+| MS     | 15.1      | 3         | 58        | 811     | 19        | 9          |
+| GO     | 14.9      | 1         | 181       | 2,277   | 20        | 8          |
+| RJ     | 14.7      | 1         | 208       | 14,145  | 21        | 6          |
+| RS     | 14.7      | 1         | 186       | 6,133   | 21        | 6          |
+| SC     | 14.5      | 1         | 98        | 4,098   | 23        | 5          |
+| DF     | 12.5      | 1         | 68        | 2,355   | 24        | 4          |
+| MG     | 11.5      | 1         | 187       | 12,917  | 25        | 2          |
+| PR     | 11.5      | 1         | 97        | 5,649   | 25        | 2          |
+| **SP** | **8.3**   | 1         | 191       | **46,432** | **27** | **1**   |
+
+> **AP y RR empatan en el peor tiempo** con 27.8 días promedio. **SP** entrega en 8.3 días — una brecha de 3.3x vs el norte del país, explicada por infraestructura logística y distancia geográfica.
+
+</details>
 
 ---
 
@@ -587,7 +788,55 @@ FROM base GROUP BY categoria HAVING COUNT(*) >= 50
 ORDER BY score_promedio DESC;
 ```
 
+**Columnas de `reporting.vw_satisfaccion_cliente`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `categoria` | VARCHAR | Categoría del producto en inglés (o `'Sin categoría'`) |
+| `score_promedio` | NUMERIC | Promedio del `review_score` (escala 1–5) |
+| `total_reviews` | BIGINT | Total de reseñas para la categoría (filtro: mínimo 50) |
+| `reviews_positivas` | BIGINT | Reseñas con score ≥ 4 |
+| `reviews_negativas` | BIGINT | Reseñas con score ≤ 2 |
+| `pct_satisfaccion` | NUMERIC | % de reseñas positivas sobre el total |
+| `ticket_promedio` | NUMERIC | Revenue promedio por ítem en la categoría (BRL) |
+| `ranking_satisfaccion` | BIGINT | Posición de la categoría por score promedio (`RANK() DESC`) |
+
+> Filtra categorías con menos de 50 reseñas (`HAVING COUNT(*) >= 50`) para evitar sesgos estadísticos. Resultado: 60 de 72 categorías totales.
+
 **Visual:** Scatter plot — eje X: ticket promedio, eje Y: score satisfacción, tamaño burbuja: total reviews.
+
+**Ver en el Dashboard:** [Página 3 — Calidad del Servicio](#página-3--calidad-del-servicio--logística-y-satisfacción) · Scatter "Satisfacción vs Precio por Categoría"
+
+<details>
+<summary>📊 Datos reales — <code>reporting.vw_satisfaccion_cliente</code> (top 10 y bottom 5 de 60 categorías)</summary>
+
+**Top 10 — Mayor satisfacción:**
+
+| Rank | Categoría                            | Score Prom. | Reseñas | % Positivas | Ticket Prom. |
+|------|--------------------------------------|-------------|---------|-------------|-------------|
+| 1    | books_general_interest               | 4.45        | 549     | 87.8%       | 101.47      |
+| 2    | costruction_tools_tools              | 4.44        | 99      | 90.9%       | 179.11      |
+| 3    | books_imported                       | 4.40        | 60      | 85.0%       | 90.16       |
+| 4    | books_technical                      | 4.37        | 266     | 85.3%       | 87.58       |
+| 5    | luggage_accessories                  | 4.32        | 1,088   | 83.7%       | 156.40      |
+| 5    | food_drink                           | 4.32        | 279     | 81.7%       | 70.93       |
+| 7    | small_appliances_home_oven_and_coffee| 4.30        | 76      | 84.2%       | 660.44      |
+| 8    | fashion_shoes                        | 4.23        | 261     | 80.8%       | 108.29      |
+| 9    | food                                 | 4.22        | 495     | 81.8%       | 72.75       |
+| 10   | cine_photo                           | 4.21        | 73      | 78.1%       | 112.51      |
+
+**Bottom 5 — Menor satisfacción:**
+
+| Rank | Categoría               | Score Prom. | Reseñas | % Positivas | Ticket Prom. |
+|------|------------------------|-------------|---------|-------------|-------------|
+| 57   | fashio_female_clothing | 3.78        | 50      | 68.0%       | 70.72       |
+| 58   | fixed_telephony        | 3.68        | 262     | 67.2%       | 242.80      |
+| 59   | fashion_male_clothing  | 3.64        | 131     | 66.4%       | 97.07       |
+| 60   | office_furniture       | 3.49        | 1,687   | 59.7%       | 201.83      |
+
+> **office_furniture** tiene el peor score (3.49) con 1,687 reseñas — alto ticket promedio (R$201) y baja satisfacción sugieren problemas con la entrega de muebles voluminosos. Los libros dominan el top por expectativas claras y entrega confiable.
+
+</details>
 
 ---
 
@@ -665,7 +914,7 @@ Los siguientes insights fueron descubiertos a partir del análisis del dataset d
 
 ### Categorías de Productos (Pareto)
 - **Solo 15 de 72 categorías** concentran el 80% del revenue total — el principio de Pareto se cumple con precisión.
-- **health_beauty** es la categoría líder con ~$1.5M en revenue, seguida de **watches_gifts** y **bed_bath_table**.
+- **health_beauty** es la categoría líder con ~$1.44M en revenue, seguida de **watches_gifts** y **bed_bath_table**.
 - Categorías como **fashion_male_clothing** y **fixed_telephony** tienen alta presencia en órdenes pero revenue bajo — indicando tickets promedio muy pequeños.
 
 ### Vendedores
@@ -673,7 +922,7 @@ Los siguientes insights fueron descubiertos a partir del análisis del dataset d
 - Los vendedores de **São Paulo (SP)** dominan el revenue por estado — lógico dado que SP es el centro económico y logístico de Brasil.
 
 ### Logística
-- Los estados del norte de Brasil (**AP, RR, AM**) tienen los peores tiempos de entrega, superando los **25 días promedio** — más del doble que SP (~12 días).
+- Los estados del norte de Brasil (**AP, RR, AM**) tienen los peores tiempos de entrega, superando los **25 días promedio** — más del triple que SP (~8.3 días), una brecha de 3.3x explicada por infraestructura vial e infraestructura logística.
 - La distancia geográfica y la infraestructura vial son los principales factores: los estados del norte son los más remotos del país.
 - Los estados del sureste (**SP, PR, SC**) lideran en eficiencia logística, lo que refuerza la ventaja competitiva de los vendedores ubicados allí.
 
@@ -803,15 +1052,42 @@ jupyter notebook notebooks/01_EDA_Olist_Ecommerce.ipynb
 
 ## Dashboard Power BI — Vista Previa
 
-El tablero se conecta directamente a las 5 vistas del schema `reporting` en Aurora PostgreSQL via DirectQuery.
+El tablero tiene **3 páginas** conectadas directamente a las 5 vistas del schema `reporting` en Aurora PostgreSQL via DirectQuery. Cada página responde preguntas de negocio específicas.
 
-### Página 1
+| Página | Título | Preguntas que responde | Vista SQL usada |
+|--------|--------|----------------------|-----------------|
+| 1 | Executive Summary | P1 — Revenue mensual y crecimiento MoM | `vw_revenue_mensual` |
+| 1 | Executive Summary | P2 — Top categorías por revenue | `vw_top_categorias_pareto` |
+| 2 | Análisis de Vendedores y Categorías | P2 — Curva de Pareto acumulada | `vw_top_categorias_pareto` |
+| 2 | Análisis de Vendedores y Categorías | P3 — Ranking de vendedores | `vw_ranking_vendedores` |
+| 3 | Calidad del Servicio | P4 — Tiempos de entrega por estado | `vw_tiempo_entrega_estado` |
+| 3 | Calidad del Servicio | P5 — Satisfacción vs precio por categoría | `vw_satisfaccion_cliente` |
+
+---
+
+### Página 1 — Executive Summary
+> Responde **P1** (¿Cómo evolucionó el revenue?) y **P2** (¿Qué categorías lideran?)
+>
+> KPIs globales · Línea de revenue mensual · % Crecimiento MoM · Barras de top categorías · Slicer por año y mes
+
 ![Dashboard Página 1](powerbi/screenshots/dashboard_p01.png)
 
-### Página 2
+---
+
+### Página 2 — Análisis de Vendedores y Categorías
+> Responde **P2** (Pareto de categorías) y **P3** (¿Cuáles son los top vendedores?)
+>
+> Treemap revenue por estado · Curva de Pareto acumulada · Tabla ranking de vendedores con revenue, órdenes y ciudad · Filtros por estado y categoría
+
 ![Dashboard Página 2](powerbi/screenshots/dashboard_p02.png)
 
-### Página 3
+---
+
+### Página 3 — Calidad del Servicio — Logística y Satisfacción
+> Responde **P4** (¿Qué estados tienen peor entrega?) y **P5** (¿Satisfacción vs precio?)
+>
+> Mapa coroplético de entrega por estado · Top 10 estados con peor desempeño logístico · Scatter plot satisfacción vs ticket promedio por categoría · KPIs: días promedio de entrega y score de satisfacción
+
 ![Dashboard Página 3](powerbi/screenshots/dashboard_p03.png)
 
 > **Archivo fuente:** [`powerbi/Tablero_Ejecutivo_DWH.pbix`](powerbi/Tablero_Ejecutivo_DWH.pbix) — requiere Power BI Desktop y credenciales de Aurora.
