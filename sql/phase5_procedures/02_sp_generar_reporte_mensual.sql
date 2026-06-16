@@ -42,6 +42,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 AS $$
+#variable_conflict use_column
 -- ─── Variables de control ──────────────────────────────────
 DECLARE
     v_fecha_inicio  DATE;
@@ -89,13 +90,13 @@ BEGIN
     INTO v_cat1, v_cat2, v_cat3
     FROM (
         SELECT
-            COALESCE(p.category_name_english, p.category_name, 'Sin Categoría') AS categoria,
+            COALESCE(p.product_category_name_english, p.product_category_name, 'Sin Categoría') AS categoria,
             ROW_NUMBER() OVER (ORDER BY SUM(fi.total_value) DESC)               AS rn
         FROM dwh.fact_order_items fi
         JOIN dwh.dim_products     p  ON fi.product_sk = p.product_sk
         JOIN dwh.dim_date         dd ON fi.date_sk    = dd.date_sk
         WHERE dd.full_date BETWEEN v_fecha_inicio AND v_fecha_fin
-        GROUP BY COALESCE(p.category_name_english, p.category_name, 'Sin Categoría')
+        GROUP BY COALESCE(p.product_category_name_english, p.product_category_name, 'Sin Categoría')
     ) ranked
     WHERE rn <= 3;
 
@@ -158,7 +159,7 @@ BEGIN
     FROM dwh.fact_order_items fi
     JOIN dwh.dim_date         dd ON fi.date_sk = dd.date_sk
     WHERE dd.full_date BETWEEN v_fecha_inicio AND v_fecha_fin
-    ON CONFLICT (periodo) DO UPDATE
+    ON CONFLICT ON CONSTRAINT pk_reporte_mensual_snapshot DO UPDATE
         SET fecha_generacion  = EXCLUDED.fecha_generacion,
             ingresos_totales  = EXCLUDED.ingresos_totales,
             total_ordenes     = EXCLUDED.total_ordenes,

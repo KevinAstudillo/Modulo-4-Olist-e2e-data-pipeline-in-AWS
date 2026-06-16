@@ -34,6 +34,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 AS $$
+#variable_conflict use_column
 -- ─── Variables de control ──────────────────────────────────
 DECLARE
     v_total_vendedores  INTEGER;
@@ -80,8 +81,8 @@ BEGIN
             SELECT
                 s.seller_sk,
                 s.seller_id,
-                s.city                                      AS ciudad,
-                s.state                                     AS estado,
+                s.seller_city                               AS ciudad,
+                s.seller_state                              AS estado,
                 COALESCE(SUM(fi.total_value), 0)            AS ingresos_total,
                 COUNT(DISTINCT fi.order_id)                 AS total_ordenes,
                 COUNT(DISTINCT fi.product_sk)               AS productos_distintos,
@@ -91,7 +92,7 @@ BEGIN
             FROM dwh.fact_order_items fi
             JOIN dwh.dim_sellers      s  ON fi.seller_sk = s.seller_sk
             JOIN dwh.dim_date         dd ON fi.date_sk   = dd.date_sk
-            GROUP BY s.seller_sk, s.seller_id, s.city, s.state
+            GROUP BY s.seller_sk, s.seller_id, s.seller_city, s.seller_state
         ),
         con_cuartil AS (
             SELECT
@@ -161,27 +162,36 @@ BEGIN
     -- 3. RETURN QUERY — Resumen ejecutivo por segmento
     --    Incluye % del revenue total aportado por cada segmento
     -- ══════════════════════════════════════════════════════
+    -- CTE con aliases neutros para evitar ambigüedad entre columnas de
+    -- seller_segments y los OUT parameters del RETURNS TABLE.
     RETURN QUERY
+    WITH stats AS (
+        SELECT
+            ss.segmento                              AS seg,
+            COUNT(*)::BIGINT                         AS cnt,
+            MIN(ss.ingresos_total)::NUMERIC(15,2)    AS ing_min,
+            MAX(ss.ingresos_total)::NUMERIC(15,2)    AS ing_max,
+            AVG(ss.ingresos_total)::NUMERIC(15,2)    AS ing_avg,
+            SUM(ss.ingresos_total)::NUMERIC(15,2)    AS ing_sum
+        FROM reporting.seller_segments ss
+        GROUP BY ss.segmento
+    )
     SELECT
-        ss.segmento::CHAR(1),
-        CASE ss.segmento
+        seg::CHAR(1),
+        CASE seg
             WHEN 'A' THEN 'Alto rendimiento'
             WHEN 'B' THEN 'Medio-alto'
             WHEN 'C' THEN 'Medio-bajo'
             WHEN 'D' THEN 'Bajo rendimiento'
-        END::VARCHAR(30)                            AS descripcion,
-        COUNT(*)::BIGINT                            AS total_vendedores,
-        MIN(ss.ingresos_total)::NUMERIC(15,2)       AS ingresos_min,
-        MAX(ss.ingresos_total)::NUMERIC(15,2)       AS ingresos_max,
-        AVG(ss.ingresos_total)::NUMERIC(15,2)       AS ingresos_avg,
-        SUM(ss.ingresos_total)::NUMERIC(15,2)       AS ingresos_total,
-        ROUND(
-            (SUM(ss.ingresos_total) / NULLIF(v_ingreso_global, 0)) * 100,
-            2
-        )::NUMERIC(6,2)                             AS pct_del_total
-    FROM reporting.seller_segments ss
-    GROUP BY ss.segmento
-    ORDER BY ss.segmento;
+        END::VARCHAR(30),
+        cnt,
+        ing_min,
+        ing_max,
+        ing_avg,
+        ing_sum,
+        ROUND((ing_sum / NULLIF(v_ingreso_global, 0)) * 100, 2)::NUMERIC(6,2)
+    FROM stats
+    ORDER BY seg;
 
 -- ══════════════════════════════════════════════════════════
 -- MANEJO DE ERRORES

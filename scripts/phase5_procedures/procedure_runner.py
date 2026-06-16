@@ -27,7 +27,7 @@ def _get_connection(cfg: AuroraConfig) -> psycopg2.extensions.connection:
         host=cfg.host,
         port=cfg.port,
         dbname=cfg.database,
-        user=cfg.user,
+        user=cfg.username,
         password=cfg.password,
         sslmode="require",
         connect_timeout=10,
