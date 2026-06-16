@@ -977,22 +977,75 @@ LIMIT 10;
 
 ---
 
-## EDA Notebook
+## EDA — Análisis Exploratorio de Datos
 
-El notebook `notebooks/01_EDA_Olist_Ecommerce.ipynb` contiene un análisis exploratorio completo del dataset directamente desde los CSVs de la capa Bronze:
+> **Fuente de datos:** CSVs de la **capa Bronze** (`data/raw/`) — datos crudos sin transformar, antes del pipeline ETL.
+> Los números del EDA son independientes del DWH: el EDA suma solo `price` de los ítems, mientras que las vistas de Aurora suman `price + freight_value`. Ambas perspectivas son complementarias.
 
-| Sección | Análisis |
-|---------|----------|
-| Calidad de datos | Valores faltantes por columna, estados de órdenes |
-| Análisis temporal | Evolución mensual de órdenes y revenue 2016-2018 |
-| Revenue | Distribución de ticket, boxplot por ítems, KPI cards |
-| Geografía | Órdenes y revenue por estado (27 estados de Brasil) |
-| Categorías | Top 20 + curva de Pareto (80% del revenue) |
-| Métodos de pago | Donut por tipo, distribución de cuotas en crédito |
-| Logística | Días de entrega, ranking por estado, puntualidad vs estimado |
-| Satisfacción | Distribución de scores, score vs días entrega, top/bottom categorías |
-| Vendedores | Distribución log, Curva de Lorenz, concentración de revenue |
-| Conclusiones | Tabla resumen ejecutivo + hallazgos accionables |
+**Archivo:** [`notebooks/01_EDA_Olist_Ecommerce.ipynb`](notebooks/01_EDA_Olist_Ecommerce.ipynb)
+
+### KPIs reales extraídos del EDA (capa Bronze)
+
+| Métrica | Valor | Nota |
+|---|---|---|
+| Órdenes totales | 99,441 | Período Sep 2016 – Oct 2018 |
+| Clientes únicos | 96,096 | Excluye duplicados por `customer_unique_id` |
+| Revenue total (precio) | R$ 13,591,644 | Solo `price`, sin freight |
+| Ticket promedio por orden | R$ 137.75 | Revenue / órdenes únicas |
+| Score de satisfacción | 4.09 / 5.0 | Promedio de 99,224 reseñas |
+| Reseñas positivas (4–5★) | 57.8% | Alta polarización: 11.5% dan 1★ |
+| Días promedio de entrega | 12.1 días | Solo órdenes con fecha real de entrega |
+| Puntualidad | 91.9% | Llegaron antes de la fecha estimada |
+
+> **Diferencia con las vistas del DWH:** `vw_revenue_mensual` muestra ~R$15.8M porque incluye `freight_value` en `total_value`. El EDA muestra R$13.6M porque solo suma el precio del producto. Ambos son correctos — miden cosas distintas.
+
+### Estructura del Notebook (12 secciones)
+
+| # | Sección | Técnica principal | Hallazgo clave |
+|---|---------|-------------------|----------------|
+| 1 | Setup e Importaciones | pandas, matplotlib, seaborn | Paleta corporativa + estilo unificado |
+| 2 | Carga de Datos | `read_csv` + `parse_dates` | 8 datasets, 0 duplicados |
+| 3 | Calidad de Datos | `isnull().mean()` por columna | Reviews: 21% nulos en comentarios (campo opcional) |
+| 4 | Análisis Temporal | `dt.to_period('M')` + `fill_between` | Pico Nov-2017 (+53% MoM) — Black Friday Brasil |
+| 5 | Revenue y Tickets | `boxplot` por ítems, histograma | Distribución sesgada: mediana R$109, media R$137 |
+| 6 | Geografía | `barh` por estado | SP = 42% de las órdenes, top 3 estados = 60% revenue |
+| 7 | Categorías (Pareto) | `cumsum` + eje doble | 15 categorías = 80% del revenue |
+| 8 | Métodos de Pago | Donut chart, distribución de cuotas | Crédito = 73% del revenue, promedio 3.8 cuotas |
+| 9 | Tiempos de Entrega | `dt.days`, histograma, ranking | AP/RR = 27.8 días vs SP = 8.3 días (brecha 3.3x) |
+| 10 | Satisfacción | Score vs días de entrega, top/bottom | 4.4★ en ≤7 días vs 2.6★ en >30 días |
+| 11 | Vendedores | Curva de Lorenz, log distribution | Top 5% vendedores = 50% del revenue |
+| 12 | Conclusiones | Matriz Impacto vs Esfuerzo | 5 recomendaciones priorizadas para el negocio |
+
+### Hallazgos de alto nivel
+
+**Crecimiento:**
+El marketplace creció >200% en 18 meses (Sep 2016 → Oct 2018), impulsado por eventos estacionales. El pico de noviembre 2017 (+53% MoM) confirma la sensibilidad al Black Friday brasileño como palanca de demanda.
+
+**Pareto en Categorías:**
+15 de 72 categorías concentran el 80% del revenue. El long tail (57 categorías) genera solo el 20% restante — señal de que el catálogo puede optimizarse priorizando las categorías líderes.
+
+**Logística como Driver de NPS:**
+La correlación entre tiempo de entrega y score de satisfacción es la más fuerte del dataset. Reducir los tiempos de entrega en el norte/nordeste (actualmente 2-3x el promedio nacional) es la iniciativa con mayor impacto potencial en retención.
+
+**Concentración de Vendedores:**
+La Curva de Lorenz confirma una distribución altamente inequitativa: el 5% superior de vendedores genera el 50% del GMV. Un programa de fidelización para el segmento A (implementado en `sp_segmentar_vendedores()`) tiene retorno inmediato.
+
+### Conexión EDA → Pipeline → Power BI
+
+```
+Bronze (CSVs)          Silver (staging)        Gold (DWH)            BI
+──────────────         ────────────────         ──────────           ──────
+EDA valida que:        Tipos TEXT → sin         star schema           5 vistas
+• 99,441 órdenes  →    errores de carga    →    tipado + FKs    →    en reporting
+• 3,095 vendedores     NULLIF pattern           surrogate keys        Power BI
+• 72 categorías        sin transformar          dim + fact tables     DirectQuery
+```
+
+Los hallazgos del EDA justifican cada decisión del modelo:
+- La distribución temporal irregular → `generate_series()` para `dim_date` sin huecos
+- Los campos vacíos en timestamps → patrón `NULLIF(col, '')::TIMESTAMP`
+- La concentración de vendedores → `sp_segmentar_vendedores()` con NTILE(4)
+- Las 5 preguntas de negocio → 5 vistas en `schema reporting`
 
 ---
 
