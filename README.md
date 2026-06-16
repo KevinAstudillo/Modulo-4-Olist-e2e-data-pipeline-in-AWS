@@ -844,44 +844,135 @@ ORDER BY score_promedio DESC;
 
 ## Phase 5 — Stored Procedures PL/pgSQL
 
-Dos funciones avanzadas que demuestran dominio de PL/pgSQL en Aurora PostgreSQL:
+### ¿Por qué snapshots y no solo vistas?
+
+Las vistas de Fase 4 recalculan todo en tiempo real cada vez que Power BI las consulta. Los stored procedures de Fase 5 **pre-calculan y persisten los resultados** en tablas físicas:
+
+| | Vistas (Fase 4) | Snapshots (Fase 5) |
+|---|---|---|
+| Cuándo se calcula | Cada consulta | Una vez al ejecutar el SP |
+| Velocidad | Depende del volumen de datos | Instantánea (ya calculado) |
+| Histórico | Solo el estado actual | Guarda el estado en el momento de ejecución |
+| Comparativas MoM/YoY | Requiere recalcular | Pre-calculadas y almacenadas |
+
+### Flujo de ejecución de Fase 5
+
+```
+[1/4] Crea tablas destino     → reporting.reporte_mensual_snapshot
+                                 reporting.seller_segments
+
+[2/4] Despliega funciones     → sp_generar_reporte_mensual(año, mes)
+                                 sp_segmentar_vendedores()
+
+[3/4] Batch 2016-2018         → Llama sp_generar_reporte_mensual() 36 veces
+                                 (una por cada mes del dataset)
+                                 → UPSERT en reporte_mensual_snapshot
+
+[4/4] Segmentación            → Llama sp_segmentar_vendedores() una vez
+                                 → Inserta 3,095 filas en seller_segments
+```
+
+---
 
 ### `sp_generar_reporte_mensual(p_anio, p_mes)`
 
-Genera un snapshot ejecutivo completo para cualquier período YYYY-MM:
+Genera un snapshot ejecutivo para cualquier período YYYY-MM. Calcula KPIs del mes, los compara con el mes anterior (MoM) y el mismo mes del año anterior (YoY), identifica top 3 categorías y vendedores, y hace UPSERT en `reporte_mensual_snapshot`.
 
-| Técnica | Descripción |
-|---------|-------------|
-| `RAISE EXCEPTION` | Valida que el mes esté entre 1-12, lanza error con ERRCODE personalizado |
-| `RAISE NOTICE` | Log operacional en cada paso del procedure |
-| `SELECT INTO` | Asigna top 3 categorías y vendedores a variables |
-| `INSERT ... ON CONFLICT DO UPDATE` | Upsert: crea o actualiza el snapshot del período |
-| `GET DIAGNOSTICS ROW_COUNT` | Verifica cuántas filas fueron afectadas |
-| `RETURN QUERY` + múltiples CTEs | Retorna KPIs con comparativas MoM y YoY |
-| Bloque `EXCEPTION` | Manejo diferenciado: re-lanza errores de validación, captura errores inesperados |
+**Columnas de `reporting.reporte_mensual_snapshot`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `periodo` | VARCHAR(7) | Período en formato `YYYY-MM` — PK de la tabla |
+| `fecha_generacion` | TIMESTAMPTZ | Cuándo se ejecutó el procedure |
+| `ingresos_totales` | NUMERIC | Revenue total del mes (BRL) |
+| `total_ordenes` | BIGINT | Órdenes únicas en el mes |
+| `ticket_promedio` | NUMERIC | Revenue promedio por ítem |
+| `top_categoria_1/2/3` | TEXT | Las 3 categorías con mayor revenue en el mes |
+| `top_vendedor_1/2/3` | TEXT | Los 3 vendedores con mayor revenue en el mes |
+| `score_satisfaccion` | NUMERIC | Promedio de review_score del mes (1–5) |
+
+**Técnicas PL/pgSQL demostradas:**
+
+| Técnica | Uso |
+|---------|-----|
+| `RAISE EXCEPTION` + `ERRCODE` | Valida que mes esté entre 1–12 |
+| `RAISE NOTICE` | Log operacional en cada paso |
+| `SELECT INTO` | Asigna top 3 categorías y vendedores a variables locales |
+| `INSERT ... ON CONFLICT ON CONSTRAINT ... DO UPDATE` | Upsert idempotente por período |
+| `GET DIAGNOSTICS ROW_COUNT` | Verifica filas afectadas tras el upsert |
+| `RETURN QUERY` + CTEs con `LAG` y `CROSS JOIN` | KPIs con comparativas MoM y YoY |
+| Bloque `EXCEPTION` | Re-lanza errores de validación, captura errores inesperados |
 
 ```sql
--- Uso
+-- Consultar el reporte de agosto 2018 en tiempo real:
 SELECT * FROM reporting.sp_generar_reporte_mensual(2018, 8);
+
+-- Ver todos los snapshots persistidos:
+SELECT periodo, ingresos_totales, total_ordenes, top_categoria_1, score_satisfaccion
+FROM reporting.reporte_mensual_snapshot
+ORDER BY periodo;
 ```
+
+---
 
 ### `sp_segmentar_vendedores()`
 
-Clasifica los ~3,095 vendedores activos en segmentos A/B/C/D usando cuartiles:
+Clasifica los 3,095 vendedores activos en 4 segmentos (A/B/C/D) usando cuartiles de revenue. Recalcula desde cero con cada ejecución (`TRUNCATE` + `INSERT`).
 
-| Técnica | Descripción |
-|---------|-------------|
-| `TRUNCATE` | Limpia la tabla destino antes de recalcular |
-| `FOR r IN (...) LOOP` | Cursor implícito — itera vendedor por vendedor |
-| `NTILE(4) OVER (ORDER BY ...)` | Divide en cuartiles: Segmento A = top 25% revenue |
-| `CASE WHEN` en variable | Mapea cuartil → letra (1→A, 2→B, 3→C, 4→D) |
+**Lógica de segmentación:**
+
+| Segmento | Cuartil | Descripción | Criterio |
+|---|---|---|---|
+| **A** | 1 (top) | Alto rendimiento | Top 25% de revenue total |
+| **B** | 2 | Medio-alto | 25%–50% de revenue total |
+| **C** | 3 | Medio-bajo | 50%–75% de revenue total |
+| **D** | 4 (bottom) | Bajo rendimiento | Bottom 25% de revenue total |
+
+**Columnas de `reporting.seller_segments`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `seller_id` | VARCHAR | ID del vendedor (anonimizado) |
+| `ciudad` | VARCHAR | Ciudad del vendedor |
+| `estado` | CHAR(2) | Estado brasileño |
+| `ingresos_total` | NUMERIC | Revenue acumulado total del vendedor |
+| `total_ordenes` | INTEGER | Órdenes atendidas |
+| `productos_distintos` | INTEGER | SKUs distintos vendidos |
+| `ticket_promedio` | NUMERIC | Revenue promedio por ítem |
+| `primera_venta` | DATE | Fecha de la primera venta registrada |
+| `ultima_venta` | DATE | Fecha de la última venta registrada |
+| `segmento` | CHAR(1) | `A` / `B` / `C` / `D` |
+| `fecha_segmentacion` | TIMESTAMPTZ | Cuándo se ejecutó la segmentación |
+
+**Técnicas PL/pgSQL demostradas:**
+
+| Técnica | Uso |
+|---------|-----|
+| `TRUNCATE` | Limpia seller_segments antes de recalcular |
+| `FOR r IN (...) LOOP` | Cursor implícito — itera los 3,095 vendedores |
+| `NTILE(4) OVER (ORDER BY revenue DESC)` | Divide en cuartiles: cuartil 1 = top 25% |
+| `CASE WHEN` en variable | Mapea cuartil → letra (`1→A`, `2→B`, `3→C`, `4→D`) |
 | `INSERT` dentro del loop | Inserta cada vendedor clasificado individualmente |
-| Log de progreso con `%` | `RAISE NOTICE` cada 500 registros procesados |
-| `RETURN QUERY` | Retorna resumen por segmento con % del revenue total |
+| `% 500 = 0` con `RAISE NOTICE` | Log de progreso cada 500 registros |
+| `RETURN QUERY` con CTE | Retorna resumen agregado por segmento |
+| `#variable_conflict use_column` | Resuelve ambigüedad entre OUT parameters y columnas de tabla |
 
 ```sql
--- Uso
+-- Ejecutar segmentación y ver resumen por segmento:
 SELECT * FROM reporting.sp_segmentar_vendedores();
+
+-- Ver distribución de vendedores en seller_segments:
+SELECT segmento, COUNT(*) AS vendedores, ROUND(AVG(ingresos_total),2) AS revenue_promedio
+FROM reporting.seller_segments
+GROUP BY segmento
+ORDER BY segmento;
+
+-- Ver top 10 vendedores Segmento A:
+SELECT seller_id, ciudad, estado, ingresos_total, total_ordenes
+FROM reporting.seller_segments
+WHERE segmento = 'A'
+ORDER BY ingresos_total DESC
+LIMIT 10;
 ```
 
 ---
