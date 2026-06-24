@@ -1216,10 +1216,14 @@ jupyter notebook notebooks/01_EDA_Olist_Ecommerce.ipynb
 ### 7. Correr el dashboard Streamlit
 
 ```bash
+# Si streamlit está en el PATH (venv activo):
 streamlit run dashboard/app.py
-# → http://localhost:8501
-# Ctrl + C para detener
+
+# En Windows con el venv del proyecto (sin activar):
+.\Proyecto_Final_Mod_4\Scripts\streamlit.exe run dashboard/app.py
 ```
+
+Abre automáticamente en `http://localhost:8501`. Para detenerlo: **Ctrl + C**.
 
 ---
 
@@ -1340,10 +1344,10 @@ Lee directamente desde los CSVs en `data/raw/` (la misma fuente del EDA), ejecut
 ### Cómo ejecutar el dashboard
 
 ```bash
-# Desde la raíz del proyecto, con el venv activo:
+# Si streamlit está en el PATH (venv activo):
 streamlit run dashboard/app.py
 
-# O usando la ruta completa al ejecutable del venv:
+# En Windows con el venv del proyecto (sin activar):
 .\Proyecto_Final_Mod_4\Scripts\streamlit.exe run dashboard/app.py
 ```
 
