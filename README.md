@@ -1363,6 +1363,8 @@ Abre automáticamente en `http://localhost:8501`. Para detenerlo: **Ctrl + C** e
 
 Los **6 KPIs principales** (órdenes, revenue, ticket promedio, score, días de entrega, puntualidad) se actualizan dinámicamente con cada combinación de filtros del sidebar.
 
+![Streamlit Dashboard — Tab Satisfacción](dashboard/dashboard_preview.png)
+
 ---
 
 ## Estado del Proyecto
