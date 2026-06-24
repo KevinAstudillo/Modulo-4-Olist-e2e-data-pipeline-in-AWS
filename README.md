@@ -29,6 +29,7 @@ flowchart LR
     C -->|SQL ETL\ntype casting + NULLIF| D[("⭐ Aurora\nschema: dwh")]
     D -->|"Phase 4: CTEs + Window Functions\nPhase 5: PL/pgSQL Stored Procs"| E[("📐 Aurora\nschema: reporting")]
     E -->|DirectQuery| F["📊 Power BI\nDAX + Dashboards"]
+    A -->|"data/raw/ CSVs\nStreamlit + Plotly"| G["🌐 Streamlit\nDashboard Interactivo"]
 
     style A fill:#f5a623,color:#000
     style B fill:#e8832a,color:#fff
@@ -36,6 +37,7 @@ flowchart LR
     style D fill:#27ae60,color:#fff
     style E fill:#2980b9,color:#fff
     style F fill:#8e44ad,color:#fff
+    style G fill:#e63946,color:#fff
 ```
 
 ---
@@ -1093,6 +1095,8 @@ Para una vista completa de la arquitectura del sistema, incluyendo diagramas de 
 
 ```
 .
+├── dashboard/
+│   └── app.py                           # Dashboard Streamlit — 7 tabs, filtros, 6 KPIs
 ├── docs/
 │   └── architecture/
 │       └── architecture.md              # Diagramas + decisiones de arquitectura
@@ -1209,6 +1213,14 @@ pytest
 jupyter notebook notebooks/01_EDA_Olist_Ecommerce.ipynb
 ```
 
+### 7. Correr el dashboard Streamlit
+
+```bash
+streamlit run dashboard/app.py
+# → http://localhost:8501
+# Ctrl + C para detener
+```
+
 ---
 
 ## Testing
@@ -1310,6 +1322,49 @@ El tablero tiene **3 páginas** conectadas directamente a las 5 vistas del schem
 
 ---
 
+## Dashboard Interactivo — Streamlit
+
+Como capa adicional de visualización y exploración, el proyecto incluye un dashboard web construido con **Streamlit + Plotly** que corre localmente sin necesidad de Aurora ni credenciales de AWS.
+
+Lee directamente desde los CSVs en `data/raw/` (la misma fuente del EDA), ejecuta toda la lógica en Python y expone las mismas métricas del pipeline en una interfaz interactiva.
+
+### Diferencias frente al tablero Power BI
+
+| | Streamlit (`dashboard/app.py`) | Power BI (`powerbi/*.pbix`) |
+|---|---|---|
+| Fuente de datos | CSVs locales (`data/raw/`) | Aurora PostgreSQL via DirectQuery |
+| Instalación | `pip install` + `streamlit run` | Power BI Desktop + credenciales Aurora |
+| Interactividad | Filtros en sidebar, sliders | Slicers nativos Power BI |
+| Propósito | Exploración rápida, demo local | Dashboard ejecutivo de producción |
+
+### Cómo ejecutar el dashboard
+
+```bash
+# Desde la raíz del proyecto, con el venv activo:
+streamlit run dashboard/app.py
+
+# O usando la ruta completa al ejecutable del venv:
+.\Proyecto_Final_Mod_4\Scripts\streamlit.exe run dashboard/app.py
+```
+
+Abre automáticamente en `http://localhost:8501`. Para detenerlo: **Ctrl + C** en la terminal.
+
+### Secciones del dashboard
+
+| Tab | Contenido |
+|-----|-----------|
+| Temporal | Volumen de órdenes y revenue mensual (gráficas de área + barra) |
+| Geografía | Distribución de órdenes y revenue por estado con % de participación |
+| Categorías | Top N categorías por revenue + curva de Pareto interactiva |
+| Pagos | Donut por tipo de pago + distribución de cuotas en tarjeta de crédito |
+| Entregas | Distribución de días de entrega + score de satisfacción por rango de entrega |
+| Satisfacción | Distribución de review scores + pie chart |
+| Vendedores | Curva de Lorenz + revenue por estado del vendedor |
+
+Los **6 KPIs principales** (órdenes, revenue, ticket promedio, score, días de entrega, puntualidad) se actualizan dinámicamente con cada combinación de filtros del sidebar.
+
+---
+
 ## Estado del Proyecto
 
 | Fase | Estado | Descripción |
@@ -1319,11 +1374,12 @@ El tablero tiene **3 páginas** conectadas directamente a las 5 vistas del schem
 | 3 — Star Schema DWH | ✅ Completa | 5 dims + 3 facts, 15 tests de calidad |
 | 4 — Reporting Layer | ✅ Completa | 5 vistas SQL avanzadas en schema `reporting` |
 | 5 — Stored Procedures | ✅ Completa | 2 PL/pgSQL functions: snapshots mensuales + segmentación A/B/C/D |
-| 6 — Power BI | ✅ Completa | Dashboard v1 conectado a `reporting.*`, exportado en PDF |
+| 6 — Power BI | ✅ Completa | Dashboard ejecutivo conectado a `reporting.*`, exportado en PDF |
+| 7 — Streamlit Dashboard | ✅ Completa | Dashboard interactivo local — 7 tabs, 6 KPIs, filtros dinámicos |
 | EDA Notebook | ✅ Completa | Análisis exploratorio — 12 secciones, 10 visualizaciones |
 
 ---
 
 ## Tecnologías
 
-`Python 3.11` · `boto3` · `psycopg2` · `kaggle` · `python-dotenv` · `AWS S3` · `AWS Aurora PostgreSQL 17` · `SQL` · `PL/pgSQL` · `Jupyter` · `ipykernel` · `pandas` · `matplotlib` · `seaborn` · `numpy` · `Power BI` · `DAX`
+`Python 3.11` · `boto3` · `psycopg2` · `kaggle` · `python-dotenv` · `AWS S3` · `AWS Aurora PostgreSQL 17` · `SQL` · `PL/pgSQL` · `Jupyter` · `ipykernel` · `pandas` · `matplotlib` · `seaborn` · `numpy` · `Power BI` · `DAX` · `Streamlit` · `Plotly`
